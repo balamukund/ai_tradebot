@@ -1,0 +1,699 @@
+import '../../services/angel_api_service_dio.dart';
+
+import 'package:flutter/material.dart';
+import 'package:sizer/sizer.dart';
+
+import '../../core/app_export.dart';
+import './widgets/ai_suggestions_widget.dart';
+import './widgets/confirmation_dialog_widget.dart';
+import './widgets/order_preview_widget.dart';
+import './widgets/order_type_selector_widget.dart';
+import './widgets/price_input_widget.dart';
+import './widgets/quantity_input_widget.dart';
+
+class TradeExecution extends StatefulWidget {
+  const TradeExecution({Key? key}) : super(key: key);
+
+  @override
+  State<TradeExecution> createState() => _TradeExecutionState();
+}
+
+class _TradeExecutionState extends State<TradeExecution>
+    with TickerProviderStateMixin {
+  late AnimationController _slideController;
+  late Animation<Offset> _slideAnimation;
+  late AngelApiService angel;
+
+
+  // Form controllers
+  final TextEditingController _quantityController = TextEditingController();
+  final TextEditingController _priceController = TextEditingController();
+  final TextEditingController _stopLossController = TextEditingController();
+  final TextEditingController _targetController = TextEditingController();
+
+  // State variables
+  String _selectedOrderType = 'Market';
+  bool _bracketOrderEnabled = false;
+  bool _trailingStopEnabled = false;
+  bool _profitBookingEnabled = true;
+  bool _isLoading = false;
+  bool _isPaperTrading = true;
+
+  // Mock data
+  final Map<String, dynamic> _stockData = {
+    "symbol": "RELIANCE",
+    "currentPrice": 2847.50,
+    "bidPrice": 2847.25,
+    "askPrice": 2847.75,
+    "change": 23.50,
+    "changePercent": 0.83,
+    "volume": 1234567,
+    "lastUpdated": DateTime.now(),
+  };
+
+  final Map<String, dynamic> _aiSuggestions = {
+    "recommendedStopLoss": 2820.00,
+    "recommendedTarget": 2890.00,
+    "volatilityScore": 0.65,
+    "riskLevel": "Medium",
+    "confidence": 0.78,
+    "reasoning": "Based on 20-day volatility and support/resistance levels",
+  };
+
+  final Map<String, dynamic> _portfolioData = {
+    "availableFunds": 125000.00,
+    "totalPortfolio": 500000.00,
+    "maxPositionSize": 50000.00,
+    "currentHoldings": 0,
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _slideController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0, 1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _slideController,
+      curve: Curves.easeOutCubic,
+    ));
+    angel = AngelApiService(
+      clientCode: 'YOUR_CLIENT_CODE',
+      password: 'YOUR_PASSWORD',
+      apiKey: 'YOUR_API_KEY',
+    );
+
+    _slideController.forward();
+    _initializeDefaultValues();
+  }
+
+  void _initializeDefaultValues() {
+    _quantityController.text = "10";
+    _priceController.text = _stockData["currentPrice"].toString();
+    _stopLossController.text = _aiSuggestions["recommendedStopLoss"].toString();
+    _targetController.text = _aiSuggestions["recommendedTarget"].toString();
+  }
+
+  @override
+  void dispose() {
+    _slideController.dispose();
+    _quantityController.dispose();
+    _priceController.dispose();
+    _stopLossController.dispose();
+    _targetController.dispose();
+    super.dispose();
+  }
+
+  void _onOrderTypeChanged(String orderType) {
+    setState(() {
+      _selectedOrderType = orderType;
+      if (orderType == 'Market') {
+        _priceController.text = _stockData["currentPrice"].toString();
+      }
+    });
+  }
+
+  void _adjustPrice(bool increase) {
+    double currentPrice = double.tryParse(_priceController.text) ?? 0;
+    double adjustment = increase ? 0.25 : -0.25;
+    double newPrice = currentPrice + adjustment;
+    _priceController.text = newPrice.toStringAsFixed(2);
+  }
+
+  void _calculatePositionSize(double percentage) {
+    double portfolioValue = _portfolioData["totalPortfolio"] as double;
+    double targetAmount = portfolioValue * (percentage / 100);
+    double currentPrice = double.tryParse(_priceController.text) ?? 1;
+    int quantity = (targetAmount / currentPrice).floor();
+    _quantityController.text = quantity.toString();
+  }
+
+  Future<void> _placeOrder() async {
+    if (!_validateOrder()) return;
+
+    bool confirmed = await _showConfirmationDialog();
+    if (!confirmed) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // Simulate order placement
+      await Future.delayed(const Duration(seconds: 2));
+
+      if (mounted) {
+        _showSuccessDialog();
+      }
+    } catch (e) {
+      if (mounted) {
+        _showErrorDialog("Order placement failed: \${e.toString()}");
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  bool _validateOrder() {
+    double quantity = double.tryParse(_quantityController.text) ?? 0;
+    double price = double.tryParse(_priceController.text) ?? 0;
+    double totalValue = quantity * price;
+    double availableFunds = _portfolioData["availableFunds"] as double;
+
+    if (quantity <= 0) {
+      _showErrorDialog("Please enter a valid quantity");
+      return false;
+    }
+
+    if (price <= 0) {
+      _showErrorDialog("Please enter a valid price");
+      return false;
+    }
+
+    if (totalValue > availableFunds) {
+      _showErrorDialog(
+          "Insufficient funds. Available: ₹\${availableFunds.toStringAsFixed(2)}");
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<bool> _showConfirmationDialog() async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => ConfirmationDialogWidget(
+            orderType: _selectedOrderType,
+            symbol: _stockData["symbol"] as String,
+            quantity: int.tryParse(_quantityController.text) ?? 0,
+            price: double.tryParse(_priceController.text) ?? 0,
+            isPaperTrading: _isPaperTrading,
+            onConfirm: () => Navigator.of(context).pop(true),
+            onCancel: () => Navigator.of(context).pop(false),
+          ),
+        ) ??
+        false;
+  }
+
+  void _showSuccessDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          'Order Placed Successfully',
+          style: AppTheme.lightTheme.textTheme.titleLarge,
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Order ID: TXN${DateTime.now().millisecondsSinceEpoch}',
+              style: AppTheme.lightTheme.textTheme.bodyMedium,
+            ),
+            SizedBox(height: 2.h),
+            if (_isPaperTrading)
+              Container(
+                padding: EdgeInsets.all(2.w),
+                decoration: BoxDecoration(
+                  color: AppTheme.getWarningColor(true).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Paper Trading Mode - No real money involved',
+                  style: AppTheme.lightTheme.textTheme.bodySmall?.copyWith(
+                    color: AppTheme.getWarningColor(true),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              Navigator.pushNamed(context, '/trade-history');
+            },
+            child: const Text('View Trade History'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              Navigator.of(context).pop();
+            },
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          'Error',
+          style: AppTheme.lightTheme.textTheme.titleLarge?.copyWith(
+            color: AppTheme.getErrorColor(true),
+          ),
+        ),
+        content: Text(
+          message,
+          style: AppTheme.lightTheme.textTheme.bodyMedium,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+@override
+Widget build(BuildContext context) {
+  return Scaffold(
+    backgroundColor: Colors.black.withAlpha(128),
+    body: GestureDetector(
+      onTap: () => Navigator.of(context).pop(),
+      child: Container(
+        width: double.infinity,
+        height: double.infinity,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: Container(color: Colors.transparent),
+              ),
+            ),
+            SlideTransition(
+              position: _slideAnimation,
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Container(
+                  constraints: BoxConstraints(
+                    maxHeight: 90.h,
+                    minHeight: 60.h,
+                  ),
+                  child: GestureDetector(
+                    onTap: () {},
+                    child: Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: AppTheme.lightTheme.scaffoldBackgroundColor,
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(20),
+                          topRight: Radius.circular(20),
+                        ),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildHeader(),
+                          Flexible(
+                            child: SingleChildScrollView(
+                              padding: EdgeInsets.all(4.w),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _buildStockInfo(),
+                                  SizedBox(height: 3.h),
+                                  OrderTypeSelectorWidget(
+                                    selectedType: _selectedOrderType,
+                                    onTypeChanged: _onOrderTypeChanged,
+                                  ),
+                                  SizedBox(height: 3.h),
+                                  QuantityInputWidget(
+                                    controller: _quantityController,
+                                    portfolioData: _portfolioData,
+                                    currentPrice: double.tryParse(
+                                            _priceController.text) ??
+                                        0,
+                                    onPositionSizeCalculated:
+                                        _calculatePositionSize,
+                                  ),
+                                  SizedBox(height: 3.h),
+                                  PriceInputWidget(
+                                    controller: _priceController,
+                                    orderType: _selectedOrderType,
+                                    stockData: _stockData,
+                                    onPriceAdjusted: _adjustPrice,
+                                  ),
+                                  SizedBox(height: 3.h),
+                                  AiSuggestionsWidget(
+                                    suggestions: _aiSuggestions,
+                                    stopLossController: _stopLossController,
+                                    targetController: _targetController,
+                                  ),
+                                  SizedBox(height: 3.h),
+                                  _buildAdvancedOptions(),
+                                  SizedBox(height: 3.h),
+                                  OrderPreviewWidget(
+                                    orderType: _selectedOrderType,
+                                    symbol: _stockData["symbol"] as String,
+                                    quantity: int.tryParse(
+                                            _quantityController.text) ??
+                                        0,
+                                    price: double.tryParse(
+                                            _priceController.text) ??
+                                        0,
+                                    stopLoss: double.tryParse(
+                                        _stopLossController.text),
+                                    target: double.tryParse(
+                                        _targetController.text),
+                                    bracketOrderEnabled: _bracketOrderEnabled,
+                                    isPaperTrading: _isPaperTrading,
+                                  ),
+                                  SizedBox(height: 3.h),
+
+                                  // ✅ Angel One Buttons Integration
+                                  ElevatedButton(
+                                    onPressed: () async {
+                                      bool success = await angel.login();
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            success
+                                                ? 'Angel Login Success'
+                                                : 'Login Failed',
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    child: Text('Login to Angel One'),
+                                  ),
+                                  SizedBox(height: 1.h),
+                                  ElevatedButton(
+                                    onPressed: () async {
+                                      await angel.placeOrder(
+                                        symbol: _stockData["symbol"],
+                                        exchange: 'NSE',
+                                        quantity: int.tryParse(
+                                                _quantityController.text) ??
+                                            1,
+                                        orderType: 'BUY',
+                                      );
+                                    },
+                                    child: Text('Place BUY Order'),
+                                  ),
+
+                                  // End buttons
+
+                                  SizedBox(height: 2.h),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+
+  Widget _buildHeader() {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 4.w, vertical: 2.h),
+      decoration: BoxDecoration(
+        color: AppTheme.lightTheme.colorScheme.surface,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(20),
+          topRight: Radius.circular(20),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 8.w,
+            height: 0.5.h,
+            decoration: BoxDecoration(
+              color: AppTheme.lightTheme.colorScheme.outline,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const Spacer(),
+          Text(
+            'Trade Execution',
+            style: AppTheme.lightTheme.textTheme.titleLarge,
+          ),
+          const Spacer(),
+          GestureDetector(
+            onTap: () => Navigator.of(context).pop(),
+            child: CustomIconWidget(
+              iconName: 'close',
+              size: 24,
+              color: AppTheme.lightTheme.colorScheme.onSurface,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStockInfo() {
+    final change = _stockData["change"] as double;
+    final changePercent = _stockData["changePercent"] as double;
+    final isPositive = change >= 0;
+
+    return Container(
+      padding: EdgeInsets.all(4.w),
+      decoration: BoxDecoration(
+        color: AppTheme.lightTheme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppTheme.lightTheme.colorScheme.outline.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _stockData["symbol"] as String,
+                  style: AppTheme.lightTheme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                SizedBox(height: 1.h),
+                Text(
+                  '₹${(_stockData["currentPrice"] as double).toStringAsFixed(2)}',
+                  style: AppTheme.lightTheme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 2.w, vertical: 0.5.h),
+                decoration: BoxDecoration(
+                  color: isPositive
+                      ? AppTheme.getSuccessColor(true).withValues(alpha: 0.1)
+                      : AppTheme.getErrorColor(true).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '${isPositive ? '+' : ''}${change.toStringAsFixed(2)}',
+                  style: AppTheme.lightTheme.textTheme.bodyMedium?.copyWith(
+                    color: isPositive
+                        ? AppTheme.getSuccessColor(true)
+                        : AppTheme.getErrorColor(true),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              SizedBox(height: 0.5.h),
+              Text(
+                '${isPositive ? '+' : ''}${changePercent.toStringAsFixed(2)}%',
+                style: AppTheme.lightTheme.textTheme.bodySmall?.copyWith(
+                  color: isPositive
+                      ? AppTheme.getSuccessColor(true)
+                      : AppTheme.getErrorColor(true),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAdvancedOptions() {
+    return Container(
+      padding: EdgeInsets.all(4.w),
+      decoration: BoxDecoration(
+        color: AppTheme.lightTheme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppTheme.lightTheme.colorScheme.outline.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Advanced Options',
+            style: AppTheme.lightTheme.textTheme.titleMedium,
+          ),
+          SizedBox(height: 2.h),
+          _buildToggleOption(
+            'Bracket Order',
+            'Automatically set stop-loss and target',
+            _bracketOrderEnabled,
+            (value) => setState(() => _bracketOrderEnabled = value),
+          ),
+          SizedBox(height: 1.h),
+          _buildToggleOption(
+            'Trailing Stop-Loss',
+            'Adjust stop-loss as price moves favorably',
+            _trailingStopEnabled,
+            (value) => setState(() => _trailingStopEnabled = value),
+          ),
+          SizedBox(height: 1.h),
+          _buildToggleOption(
+            'Auto Profit Booking',
+            'Book profits at target price automatically',
+            _profitBookingEnabled,
+            (value) => setState(() => _profitBookingEnabled = value),
+          ),
+          SizedBox(height: 1.h),
+          _buildToggleOption(
+            'Paper Trading Mode',
+            'Practice trading without real money',
+            _isPaperTrading,
+            (value) => setState(() => _isPaperTrading = value),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToggleOption(
+    String title,
+    String subtitle,
+    bool value,
+    ValueChanged<bool> onChanged,
+  ) {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: AppTheme.lightTheme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              Text(
+                subtitle,
+                style: AppTheme.lightTheme.textTheme.bodySmall?.copyWith(
+                  color: AppTheme.lightTheme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Switch(
+          value: value,
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
+ElevatedButton(
+  onPressed: () async {
+    bool success = await angel.login();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success ? 'Angel Login Success' : 'Login Failed',
+        ),
+      ),
+    );
+  },
+  child: Text('Login to Angel One'),
+),
+SizedBox(height: 1.h),
+ElevatedButton(
+  onPressed: () async {
+    await angel.placeOrder(
+      symbol: _stockData["symbol"],
+      exchange: 'NSE',
+      quantity: int.tryParse(_quantityController.text) ?? 1,
+      orderType: 'BUY',
+    );
+  },
+  child: Text('Place BUY Order'),
+),
+SizedBox(height: 3.h),
+
+  Widget _buildPlaceOrderButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 6.h,
+      child: ElevatedButton(
+        onPressed: _isLoading ? null : _placeOrder,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: _isPaperTrading
+              ? AppTheme.getWarningColor(true)
+              : AppTheme.lightTheme.colorScheme.primary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+        child: _isLoading
+            ? SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    Colors.white,
+                  ),
+                ),
+              )
+            : Text(
+                _isPaperTrading ? 'Place Paper Order' : 'Place Order',
+                style: AppTheme.lightTheme.textTheme.titleMedium?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+      ),
+    );
+  }
+}
